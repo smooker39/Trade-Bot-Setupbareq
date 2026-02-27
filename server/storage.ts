@@ -82,11 +82,6 @@ export class DatabaseStorage implements IStorage {
   async performSelfHealing(): Promise<number> {
     console.log('[OMEGA-STORAGE] Initiating Self-Healing Cycle...');
     let fixed = 0;
-    
-    // Example: Verify trade hashes (Simplified logic for Phase 4)
-    // In a full implementation, this would cross-reference with Exchange history
-    // and recalculate integrity hashes.
-    
     return fixed;
   }
 
@@ -116,8 +111,13 @@ export class DatabaseStorage implements IStorage {
   // --- DATABASE OPS ---
 
   async getUser(): Promise<User | null> {
-    const res = await db.select().from(users).limit(1);
-    return res[0] || null;
+    try {
+      const res = await db.select().from(users).limit(1);
+      return res[0] || null;
+    } catch (e) {
+      console.error("Database getUser error:", e);
+      return null;
+    }
   }
 
   async createOrUpdateUser(user: InsertUser): Promise<void> {

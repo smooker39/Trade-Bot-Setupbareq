@@ -212,6 +212,7 @@ export class TradingEngine {
       if (!ticker || !ticker.last) return;
       
       this.currentPrice = ticker.last;
+      log.info(`[HEALTH-CHECK] Current ${this.symbol} Price: $${this.currentPrice}`);
       predatorEngine.addPrice(this.currentPrice);
       const decision = predatorEngine.getSignal();
       
