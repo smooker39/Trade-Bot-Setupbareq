@@ -1,33 +1,47 @@
 /**
- * 🚀 AUTO-SETUP SCRIPT - UPDATED FOR SEJO
- * * This script automatically configures your OKX credentials
- * on first run if they don't exist in the database.
+ * 🔐 AUTO-SETUP - Render/Cloud Deployment Safe
+ *
+ * ✅ FIX: لا توجد credentials مكشوفة في الكود.
+ * المفاتيح تُقرأ حصرياً من Environment Variables (Secrets).
+ * ضع هذه المتغيرات في Render → Environment:
+ *   OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE
+ *   SESSION_SECRET, DATABASE_URL
  */
 
-import { storage } from './storage';
-import { log } from './logger';
-
-const AUTO_CREDENTIALS = {
-  okxApiKey: '370b3ba0-6ebc-4d9e-b0ec-4af81d6dc40a',
-  okxSecret: '0C18D445E5A0D23FAF40E1F15A87EA8F',
-  okxPassword: '@Sejo_20'
-};
+import { storage } from "./storage";
+import { log } from "./logger";
 
 export async function autoSetup() {
   try {
-    // إجبار النظام على التحديث بالمفاتيح الجديدة
-    log.info('🔧 [AUTO-SETUP] Forcing update with new Sejo credentials...');
-    
-    // حفظ أو تحديث البيانات مباشرة في قاعدة البيانات
+    const apiKey = process.env.OKX_API_KEY?.trim();
+    const secret = process.env.OKX_API_SECRET?.trim();
+    const passphrase = process.env.OKX_PASSPHRASE?.trim();
+
+    if (!apiKey || !secret || !passphrase) {
+      log.warn(
+        "⚠️ [AUTO-SETUP] OKX credentials not found in environment. Skipping auto-setup."
+      );
+      log.warn(
+        "⚠️ [AUTO-SETUP] Set OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE in your environment."
+      );
+      return;
+    }
+
+    // تحقق هل الـ credentials موجودة مسبقاً في DB
+    const existing = await storage.getUser();
+    if (existing && existing.okxApiKey === apiKey) {
+      log.info("✅ [AUTO-SETUP] Credentials already configured. Skipping.");
+      return;
+    }
+
+    // حفظ في قاعدة البيانات
     await storage.createOrUpdateUser({
-      okxApiKey: AUTO_CREDENTIALS.okxApiKey,
-      okxSecret: AUTO_CREDENTIALS.okxSecret,
-      okxPassword: AUTO_CREDENTIALS.okxPassword
+      okxApiKey: apiKey,
+      okxSecret: secret,
+      okxPassword: passphrase,
     });
-    
-    log.info('✅ [AUTO-SETUP] Credentials configured successfully!');
-    log.info('✅ [AUTO-SETUP] System ready to trade with 10.26 USDT');
-    
+
+    log.info("✅ [AUTO-SETUP] OKX credentials loaded from environment successfully.");
   } catch (error: any) {
     log.error(`❌ [AUTO-SETUP] Failed: ${error.message}`);
   }

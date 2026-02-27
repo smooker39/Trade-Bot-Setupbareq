@@ -7,21 +7,21 @@ import { eventBus } from "./eventBus";
 import crypto from "crypto";
 
 /**
- * [OMEGA ZERO - PHASE 2]
- * Absolute Financial Integrity Engine
+ * [OMEGA ZERO - PHASE 2] - FIXED
+ * ✅ إصلاحات:
+ * - خفض حد الـ confidence من 70 إلى 60 لتفادي الانتظار الأبدي
+ * - إضافة خاصية activePositions و totalTrades و totalProfit المطلوبة بـ routes
+ * - إصلاح منطق السعر الحي: التحقق من صحة السعر قبل المقارنة
  */
 
-// Minimum trade size in USDT
 const MIN_TRADE_USDT = 5.0;
-
-// Adaptive TP/SL multipliers
 const ATR_TP_MULTIPLIER = 2.0;
 const ATR_SL_MULTIPLIER = 1.0;
 
 export interface ActivePosition {
   id: string;
   symbol: string;
-  side: 'buy' | 'sell';
+  side: "buy" | "sell";
   entryPrice: number;
   amount: number;
   strategy: string;
@@ -33,30 +33,34 @@ export interface ActivePosition {
   trailingStop: number | null;
   highestPrice: number;
   lowestPrice: number;
-  executionHash: string; // Double-Hash Verification
+  executionHash: string;
 }
 
 export class TradingEngine {
   public isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private symbol: string = "BTC/USDT";
-  private checkInterval: number = 10000;
+  private checkInterval: number = 10000; // 10 ثوان
 
   public lastCheck: string = new Date().toISOString();
   public currentPrice: number = 0;
   public lastSignal: string = "hold";
   public lastDecision: TradeDecision | null = null;
-  
+
   public allocationPercentage: number = 25;
   public maxConcurrentTrades: number = 2;
 
-  private activePositions: Map<string, ActivePosition> = new Map();
-  private executionLock: boolean = false; // Atomic Lock
+  // ✅ FIX: exposed as public for routes.ts /api/health
+  public totalTrades: number = 0;
+  public totalProfit: number = 0;
 
-  // Volatility spike filter
-  private volatilitySpikeThreshold: number = 3.0;
-  private lastATR: number = 0;
-  private avgATR: number[] = [];
+  private _activePositions: Map<string, ActivePosition> = new Map();
+  private executionLock: boolean = false;
+
+  // ✅ FIX: routes.ts يقرأ engine.activePositions كـ number
+  get activePositions(): number {
+    return this._activePositions.size;
+  }
 
   async start() {
     if (this.isRunning) return;
@@ -64,24 +68,26 @@ export class TradingEngine {
       log.warn("🛡️ [OMEGA] Cannot start - Safe Mode active");
       return;
     }
-    
+
     this.isRunning = true;
-    log.info("🚀 [OMEGA] Predator Engine ACTIVATED - PHASE 2 Financial Integrity");
+    log.info("🚀 [OMEGA] Predator Engine ACTIVATED");
     watchdog.heartbeat("ENGINE_START");
-    
+
     await this.restoreState();
+    // ✅ ابدأ الدورة مباشرة بدون انتظار
     this.runCycle();
     this.intervalId = setInterval(() => this.runCycle(), this.checkInterval);
-    
+
     watchdog.registerRecoveryCallbacks({
       onInternalRestart: async () => await this.internalRestart(),
       onFullInitialization: async () => await this.fullInitialization(),
-      onAdminNotification: async (msg) => await storage.createLog({ level: 'error', message: `[ADMIN] ${msg}` }),
+      onAdminNotification: async (msg) =>
+        await storage.createLog({ level: "error", message: `[ADMIN] ${msg}` }),
       onEmergencyClose: async () => {
         const result = await okxClient.emergencyCloseAllPositions();
-        this.activePositions.clear();
+        this._activePositions.clear();
         return result;
-      }
+      },
     });
   }
 
@@ -97,46 +103,55 @@ export class TradingEngine {
 
   private async internalRestart(): Promise<void> {
     this.stop();
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
     await this.start();
   }
 
   private async fullInitialization(): Promise<void> {
     this.stop();
     await okxClient.reinitialize();
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 3000));
     await this.start();
   }
 
-  // --- FINANCIAL INTEGRITY: DOUBLE-HASH VERIFICATION ---
-
-  private generateExecutionHash(decision: TradeDecision, price: number): string {
+  private generateExecutionHash(
+    decision: TradeDecision,
+    price: number
+  ): string {
     const payload = `${decision.strategy}-${decision.action}-${price}-${Date.now()}`;
-    return crypto.createHash('sha256').update(payload).digest('hex');
+    return crypto.createHash("sha256").update(payload).digest("hex");
   }
-
-  // --- CORE ENGINE LOGIC ---
 
   private async restoreState() {
     try {
       const state = await storage.loadState();
-      this.maxConcurrentTrades = Math.min(5, Math.max(1, state.maxConcurrentTrades || 2));
-      this.allocationPercentage = Math.min(100, Math.max(1, state.allocationPercentage || 25));
-      
+      this.maxConcurrentTrades = Math.min(
+        5,
+        Math.max(1, state.maxConcurrentTrades || 2)
+      );
+      this.allocationPercentage = Math.min(
+        100,
+        Math.max(1, state.allocationPercentage || 25)
+      );
+
       const trades = await storage.getTrades();
-      const oneHourAgo = Date.now() - (60 * 60 * 1000);
-      
+      this.totalTrades = trades.length;
+
+      const oneHourAgo = Date.now() - 60 * 60 * 1000;
+
       for (const trade of trades.slice(0, 10)) {
-        const tradeTime = new Date(trade.createdAt || Date.now()).getTime();
-        if (tradeTime > oneHourAgo && trade.side === 'buy') {
+        const tradeTime = new Date(
+          trade.createdAt || Date.now()
+        ).getTime();
+        if (tradeTime > oneHourAgo && trade.side === "buy") {
           const entryPrice = parseFloat(trade.price);
           const amount = parseFloat(trade.amount);
           const positionId = `restored_${trade.id}`;
-          
-          this.activePositions.set(positionId, {
+
+          this._activePositions.set(positionId, {
             id: positionId,
             symbol: trade.symbol,
-            side: trade.side as 'buy' | 'sell',
+            side: trade.side as "buy" | "sell",
             entryPrice,
             amount,
             strategy: trade.strategy,
@@ -148,43 +163,60 @@ export class TradingEngine {
             trailingStop: null,
             highestPrice: entryPrice,
             lowestPrice: entryPrice,
-            executionHash: 'RESTORED'
+            executionHash: "RESTORED",
           });
         }
       }
-      log.info(`✅ [OMEGA] State restored: ${this.activePositions.size} active positions`);
+
+      log.info(
+        `✅ [OMEGA] State restored: ${this._activePositions.size} active positions, ${this.totalTrades} total trades`
+      );
     } catch (error) {
       log.error(`❌ [OMEGA] State restore failed: ${error}`);
     }
   }
 
-  private async closePosition(positionId: string, reason: string, exitPrice: number): Promise<void> {
-    const position = this.activePositions.get(positionId);
+  private async closePosition(
+    positionId: string,
+    reason: string,
+    exitPrice: number
+  ): Promise<void> {
+    const position = this._activePositions.get(positionId);
     if (!position) return;
-    
-    // ATOMIC LOCK for closing
+
     if (this.executionLock) return;
     this.executionLock = true;
 
     try {
-      log.info(`🔒 [OMEGA-CLOSE] ${position.strategy} | ${reason} | Price: $${exitPrice}`);
-      
-      // 1. Cancel Exchange-Side SL first
+      log.info(
+        `🔒 [OMEGA-CLOSE] ${position.strategy} | ${reason} | Price: $${exitPrice}`
+      );
+
       if (position.stopLossOrderId) {
         await okxClient.cancelOrder(position.symbol, position.stopLossOrderId);
       }
 
-      // 2. Execute Market Close
       await okxClient.executeTrade({
         symbol: position.symbol,
-        side: position.side === 'buy' ? 'sell' : 'buy',
+        side: position.side === "buy" ? "sell" : "buy",
         amount: position.amount,
-        strategy: `CLOSE_${position.strategy}`
+        strategy: `CLOSE_${position.strategy}`,
       });
 
-      this.activePositions.delete(positionId);
-      eventBus.emitPositionClosed({ id: positionId, pnl: 0, reason });
+      // ✅ حساب الربح/الخسارة
+      const pnl =
+        position.side === "buy"
+          ? (exitPrice - position.entryPrice) * position.amount
+          : (position.entryPrice - exitPrice) * position.amount;
+      this.totalProfit += pnl;
+
+      this._activePositions.delete(positionId);
+      eventBus.emitPositionClosed({ id: positionId, pnl, reason });
       watchdog.heartbeat("POSITION_CLOSE");
+
+      log.info(
+        `💰 [PnL] Position ${positionId} closed. PnL: $${pnl.toFixed(4)}`
+      );
     } catch (error) {
       log.error(`❌ [OMEGA] Close failed: ${error}`);
     } finally {
@@ -195,41 +227,62 @@ export class TradingEngine {
   private async runCycle() {
     if (!this.isRunning || watchdog.isSafeMode()) return;
     watchdog.heartbeat("CYCLE_START");
-    
+    this.lastCheck = new Date().toISOString();
+
     try {
+      // ✅ FIX: جلب السعر الحي أولاً والتحقق من صحته
+      const ticker = await okxClient.fetchTicker(this.symbol);
+      if (!ticker || !ticker.last || ticker.last <= 0) {
+        log.warn("⚠️ [CYCLE] Invalid price from ticker, skipping cycle");
+        return;
+      }
+      this.currentPrice = ticker.last;
+      predatorEngine.addPrice(this.currentPrice);
+
+      // جلب الرصيد
       const balanceData = await okxClient.fetchBalance();
-      const usdtBalance = balanceData['USDT'] || 0;
-      const btcBalance = balanceData['BTC'] || 0;
-      
-      // Dynamic Balance Update with correct interface
+      const usdtBalance = balanceData["USDT"] || 0;
+      const btcBalance = balanceData["BTC"] || 0;
+
+      // إرسال تحديث الرصيد للواجهة
       eventBus.emitBalanceUpdate({
         usdt: usdtBalance,
         btc: btcBalance,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
 
-      const ticker = await okxClient.fetchTicker(this.symbol);
-      if (!ticker || !ticker.last) return;
-      
-      this.currentPrice = ticker.last;
-      log.info(`[HEALTH-CHECK] Current ${this.symbol} Price: $${this.currentPrice}`);
-      predatorEngine.addPrice(this.currentPrice);
-      const decision = predatorEngine.getSignal();
-      
-      // Monitor Positions
-      for (const pos of Array.from(this.activePositions.values())) {
-        if (pos.side === 'buy') {
-          if (this.currentPrice >= pos.takeProfitPrice) await this.closePosition(pos.id, 'TP', this.currentPrice);
-          else if (this.currentPrice <= pos.stopLossPrice) await this.closePosition(pos.id, 'SL_INTERNAL', this.currentPrice);
+      // مراقبة المراكز المفتوحة
+      for (const pos of Array.from(this._activePositions.values())) {
+        if (pos.side === "buy") {
+          if (this.currentPrice >= pos.takeProfitPrice)
+            await this.closePosition(pos.id, "TP_HIT", this.currentPrice);
+          else if (this.currentPrice <= pos.stopLossPrice)
+            await this.closePosition(pos.id, "SL_INTERNAL", this.currentPrice);
         }
       }
 
-      // Trigger trading if balance > 0 and decision is solid
-      if (usdtBalance > 0 && decision.action !== 'hold' && decision.confidence >= 70) {
-        log.info(`🎯 [PREDATOR] Auto-triggering trade for ${this.symbol} with balance ${usdtBalance}`);
+      // الحصول على إشارة المحرك
+      const decision = predatorEngine.getSignal();
+      this.lastDecision = decision;
+      this.lastSignal = decision.action;
+
+      log.info(
+        `📊 [CYCLE] Price: $${this.currentPrice} | Signal: ${decision.action} | Confidence: ${decision.confidence}% | Balance: $${usdtBalance.toFixed(2)}`
+      );
+
+      // ✅ FIX: خفض حد الـ confidence إلى 60 بدل 70 لضمان الدخول
+      // ✅ FIX: التحقق من الرصيد الحقيقي >= MIN_TRADE_USDT
+      if (
+        usdtBalance >= MIN_TRADE_USDT &&
+        decision.action !== "hold" &&
+        decision.confidence >= 60
+      ) {
+        log.info(
+          `🎯 [PREDATOR] Signal confirmed: ${decision.action.toUpperCase()} | Confidence: ${decision.confidence}% | Balance: $${usdtBalance}`
+        );
         await this.executeTrade(decision);
       }
-      
+
       watchdog.heartbeat("CYCLE_COMPLETE");
     } catch (error) {
       log.error(`❌ [OMEGA-CYCLE] Error: ${error}`);
@@ -237,44 +290,69 @@ export class TradingEngine {
   }
 
   private async executeTrade(decision: TradeDecision) {
-    // ATOMIC LOCK: Prevent Double Execution
     if (this.executionLock) {
-      log.warn("⚠️ [OMEGA] Execution Lock Active - Skipping duplicate request");
+      log.warn("⚠️ [OMEGA] Execution Lock Active - Skipping");
       return;
     }
     this.executionLock = true;
 
     try {
-      if (this.activePositions.size >= this.maxConcurrentTrades) return;
+      if (this._activePositions.size >= this.maxConcurrentTrades) {
+        log.info(
+          `⚠️ [OMEGA] Max concurrent trades (${this.maxConcurrentTrades}) reached`
+        );
+        return;
+      }
 
       const balanceData = await okxClient.fetchBalance();
-      const freeBalance = balanceData['USDT'] || 0;
+      const freeBalance = balanceData["USDT"] || 0;
       let tradeAmountUSDT = (freeBalance * this.allocationPercentage) / 100;
-      
-      if (tradeAmountUSDT < MIN_TRADE_USDT) return;
 
-      const finalQty = okxClient.roundToLotStep(tradeAmountUSDT / this.currentPrice, this.symbol);
+      if (tradeAmountUSDT < MIN_TRADE_USDT) {
+        log.warn(
+          `⚠️ [OMEGA] Trade amount $${tradeAmountUSDT.toFixed(2)} < minimum $${MIN_TRADE_USDT}`
+        );
+        return;
+      }
+
+      // ✅ FIX: التحقق من أن السعر الحالي ليس صفراً قبل القسمة
+      if (this.currentPrice <= 0) {
+        log.warn("⚠️ [OMEGA] Current price is 0, cannot execute trade");
+        return;
+      }
+
+      const finalQty = okxClient.roundToLotStep(
+        tradeAmountUSDT / this.currentPrice,
+        this.symbol
+      );
       const hash = this.generateExecutionHash(decision, this.currentPrice);
 
-      log.info(`🎯 [OMEGA-EXEC] ${decision.action.toUpperCase()} | Hash: ${hash.substring(0,8)}`);
+      log.info(
+        `🎯 [OMEGA-EXEC] ${decision.action.toUpperCase()} | Qty: ${finalQty} | Price: $${this.currentPrice} | Hash: ${hash.substring(0, 8)}`
+      );
 
-      // 1. Primary Execution
       const result = await okxClient.executeTrade({
         symbol: this.symbol,
-        side: decision.action as 'buy' | 'sell',
+        side: decision.action as "buy" | "sell",
         amount: finalQty,
-        strategy: decision.strategy
+        strategy: decision.strategy,
       });
 
       if (result.success) {
         const posId = `pos_${Date.now()}`;
-        const slPrice = decision.action === 'buy' ? this.currentPrice * 0.99 : this.currentPrice * 1.01;
-        const tpPrice = decision.action === 'buy' ? this.currentPrice * 1.02 : this.currentPrice * 0.98;
+        const slPrice =
+          decision.action === "buy"
+            ? this.currentPrice * 0.99
+            : this.currentPrice * 1.01;
+        const tpPrice =
+          decision.action === "buy"
+            ? this.currentPrice * 1.02
+            : this.currentPrice * 0.98;
 
         const position: ActivePosition = {
           id: posId,
           symbol: this.symbol,
-          side: decision.action as 'buy' | 'sell',
+          side: decision.action as "buy" | "sell",
           entryPrice: this.currentPrice,
           amount: finalQty,
           strategy: decision.strategy,
@@ -286,40 +364,49 @@ export class TradingEngine {
           trailingStop: null,
           highestPrice: this.currentPrice,
           lowestPrice: this.currentPrice,
-          executionHash: hash
+          executionHash: hash,
         };
 
-        // 2. MANDATORY EXCHANGE-SIDE HARD STOP-LOSS
+        // ✅ وضع Stop-Loss على البورصة
         try {
-          // Place trigger order on exchange immediately
           const slResult = await okxClient.createStopLossOrder(
             this.symbol,
-            decision.action === 'buy' ? 'sell' : 'buy',
+            decision.action === "buy" ? "sell" : "buy",
             finalQty,
             slPrice
           );
           position.stopLossOrderId = slResult.id;
-          log.info(`🛡️ [OMEGA] Exchange-Side SL Armed: ${slResult.id}`);
+          log.info(`🛡️ [OMEGA] Exchange SL Armed: ${slResult.id}`);
         } catch (slError) {
-          log.error(`❌ [OMEGA] CRITICAL: Exchange SL Failed. Emergency Closing Position.`);
+          log.error(
+            `❌ [OMEGA] SL placement failed. Emergency closing position.`
+          );
           await okxClient.executeTrade({
             symbol: this.symbol,
-            side: decision.action === 'buy' ? 'sell' : 'buy',
+            side: decision.action === "buy" ? "sell" : "buy",
             amount: finalQty,
-            strategy: 'EMERGENCY_EXIT_NO_SL'
+            strategy: "EMERGENCY_EXIT_NO_SL",
           });
           return;
         }
 
-        this.activePositions.set(posId, position);
-        storage.createTrade({
+        this._activePositions.set(posId, position);
+        this.totalTrades++;
+        predatorEngine.setEntry(this.currentPrice);
+
+        // ✅ حفظ الصفقة في قاعدة البيانات فوراً
+        await storage.createTrade({
           symbol: this.symbol,
           side: decision.action,
           price: this.currentPrice.toString(),
           amount: finalQty.toString(),
           cost: tradeAmountUSDT.toString(),
-          strategy: decision.strategy
+          strategy: decision.strategy,
         });
+
+        log.info(
+          `✅ [TRADE SAVED] ${decision.action.toUpperCase()} ${finalQty} ${this.symbol} @ $${this.currentPrice}`
+        );
       }
     } catch (error) {
       log.error(`❌ [OMEGA] Execution failed: ${error}`);
@@ -328,12 +415,21 @@ export class TradingEngine {
     }
   }
 
-  // Helper methods
-  public setAllocationPercentage(p: number) { this.allocationPercentage = p; }
-  public getAllocationPercentage(): number { return this.allocationPercentage; }
-  public getMaxConcurrentTrades(): number { return this.maxConcurrentTrades; }
-  public updateMaxConcurrentTrades(v: number) { this.maxConcurrentTrades = v; }
-  public canOpenNewPosition(): boolean { return this.activePositions.size < this.maxConcurrentTrades; }
+  public setAllocationPercentage(p: number) {
+    this.allocationPercentage = p;
+  }
+  public getAllocationPercentage(): number {
+    return this.allocationPercentage;
+  }
+  public getMaxConcurrentTrades(): number {
+    return this.maxConcurrentTrades;
+  }
+  public updateMaxConcurrentTrades(v: number) {
+    this.maxConcurrentTrades = v;
+  }
+  public canOpenNewPosition(): boolean {
+    return this._activePositions.size < this.maxConcurrentTrades;
+  }
 }
 
 export const engine = new TradingEngine();
