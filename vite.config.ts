@@ -28,13 +28,18 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname, "client"),
   build: {
-    outDir: path.resolve(import.meta.dirname, "dist/public"),
+    outDir: path.resolve(import.meta.dirname, "../dist/public"), // تعديل المسار ليكون صحيحاً
     emptyOutDir: true,
   },
   server: {
+    host: "0.0.0.0", // السماح بالاتصال من خارج السيرفر (حل مشكلة الشاشة السودة)
+    port: 5173,
+    strictPort: true,
+    hmr: {
+      clientPort: 443, // التوافق مع نظام تشفير Replit HTTPS
+    },
     fs: {
-      strict: true,
-      deny: ["**/.*"],
+      strict: false, // تخفيف القيود للسماح بقراءة الصور والأصول
     },
   },
 });
